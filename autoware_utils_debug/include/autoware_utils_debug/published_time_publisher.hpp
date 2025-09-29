@@ -39,8 +39,9 @@ public:
   {
   }
 
-  void publish_if_subscribed(
-    const rclcpp::PublisherBase::ConstSharedPtr & publisher, const rclcpp::Time & stamp)
+  // Template version that works with any publisher type that has get_gid() and get_topic_name()
+  template <typename PublisherT>
+  void publish_if_subscribed(const PublisherT & publisher, const rclcpp::Time & stamp)
   {
     const auto & gid_key = publisher->get_gid();
 
@@ -60,8 +61,9 @@ public:
     }
   }
 
-  void publish_if_subscribed(
-    const rclcpp::PublisherBase::ConstSharedPtr & publisher, const std_msgs::msg::Header & header)
+  // Template version that works with any publisher type that has get_gid() and get_topic_name()
+  template <typename PublisherT>
+  void publish_if_subscribed(const PublisherT & publisher, const std_msgs::msg::Header & header)
   {
     const auto & gid_key = publisher->get_gid();
 
