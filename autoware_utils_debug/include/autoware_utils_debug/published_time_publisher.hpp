@@ -15,6 +15,7 @@
 #ifndef AUTOWARE_UTILS_DEBUG__PUBLISHED_TIME_PUBLISHER_HPP_
 #define AUTOWARE_UTILS_DEBUG__PUBLISHED_TIME_PUBLISHER_HPP_
 
+#include <agnocast/agnocast.hpp>
 #include <rclcpp/rclcpp.hpp>
 
 #include <autoware_internal_msgs/msg/published_time.hpp>
@@ -29,64 +30,79 @@
 namespace autoware_utils_debug
 {
 
-class PublishedTimePublisher
+// Type traits for node-specific types
+template <typename NodeT>
+struct PublishedTimePublisherTraits;
+
+template <>
+struct PublishedTimePublisherTraits<rclcpp::Node>
+{
+  template <typename MessageT>
+  using PublisherPtr = typename rclcpp::Publisher<MessageT>::SharedPtr;
+
+  using InputPublisherPtr = rclcpp::PublisherBase::ConstSharedPtr;
+};
+
+template <>
+struct PublishedTimePublisherTraits<agnocast::Node>
+{
+  template <typename MessageT>
+  using PublisherPtr = typename agnocast::Publisher<MessageT>::SharedPtr;
+
+  template <typename MessageT>
+  using InputPublisherPtr = typename agnocast::Publisher<MessageT>::SharedPtr;
+};
+
+template <typename NodeT = rclcpp::Node>
+class BasicPublishedTimePublisher
 {
 public:
-  explicit PublishedTimePublisher(
-    rclcpp::Node * node, std::string publisher_topic_suffix = "/debug/published_time",
+  using Traits = PublishedTimePublisherTraits<NodeT>;
+  using PublishedTime = autoware_internal_msgs::msg::PublishedTime;
+  using PublishedTimePublisherPtr = typename Traits::template PublisherPtr<PublishedTime>;
+
+  explicit BasicPublishedTimePublisher(
+    NodeT * node, std::string publisher_topic_suffix = "/debug/published_time",
     const rclcpp::QoS & qos = rclcpp::QoS(1))
   : node_(node), publisher_topic_suffix_(std::move(publisher_topic_suffix)), qos_(qos)
   {
   }
 
-  void publish_if_subscribed(
+  // For rclcpp::Node - accepts rclcpp::PublisherBase
+  template <typename U = NodeT>
+  typename std::enable_if<std::is_same<U, rclcpp::Node>::value>::type publish_if_subscribed(
     const rclcpp::PublisherBase::ConstSharedPtr & publisher, const rclcpp::Time & stamp)
   {
-    const auto & gid_key = publisher->get_gid();
-
-    // if the publisher is not in the map, create a new publisher for published time
-    ensure_publisher_exists(gid_key, publisher->get_topic_name());
-
-    const auto & pub_published_time = publishers_[gid_key];
-
-    // Check if there are any subscribers, otherwise don't do anything
-    if (pub_published_time->get_subscription_count() > 0) {
-      PublishedTime published_time;
-
-      published_time.header.stamp = stamp;
-      published_time.published_stamp = rclcpp::Clock().now();
-
-      pub_published_time->publish(published_time);
-    }
+    publish_if_subscribed_impl(publisher->get_gid(), publisher->get_topic_name(), stamp);
   }
 
-  void publish_if_subscribed(
+  template <typename U = NodeT>
+  typename std::enable_if<std::is_same<U, rclcpp::Node>::value>::type publish_if_subscribed(
     const rclcpp::PublisherBase::ConstSharedPtr & publisher, const std_msgs::msg::Header & header)
   {
-    const auto & gid_key = publisher->get_gid();
+    publish_if_subscribed_impl(publisher->get_gid(), publisher->get_topic_name(), header);
+  }
 
-    // if the publisher is not in the map, create a new publisher for published time
-    ensure_publisher_exists(gid_key, publisher->get_topic_name());
+  // For agnocast::Node - accepts agnocast::Publisher
+  template <typename MessageT, typename U = NodeT>
+  typename std::enable_if<std::is_same<U, agnocast::Node>::value>::type publish_if_subscribed(
+    const typename agnocast::Publisher<MessageT>::SharedPtr & publisher, const rclcpp::Time & stamp)
+  {
+    publish_if_subscribed_impl(publisher->get_gid(), publisher->get_topic_name(), stamp);
+  }
 
-    const auto & pub_published_time = publishers_[gid_key];
-
-    // Check if there are any subscribers, otherwise don't do anything
-    if (pub_published_time->get_subscription_count() > 0) {
-      PublishedTime published_time;
-
-      published_time.header = header;
-      published_time.published_stamp = rclcpp::Clock().now();
-
-      pub_published_time->publish(published_time);
-    }
+  template <typename MessageT, typename U = NodeT>
+  typename std::enable_if<std::is_same<U, agnocast::Node>::value>::type publish_if_subscribed(
+    const typename agnocast::Publisher<MessageT>::SharedPtr & publisher,
+    const std_msgs::msg::Header & header)
+  {
+    publish_if_subscribed_impl(publisher->get_gid(), publisher->get_topic_name(), header);
   }
 
 private:
-  rclcpp::Node * node_;
+  NodeT * node_;
   std::string publisher_topic_suffix_;
   rclcpp::QoS qos_;
-
-  using PublishedTime = autoware_internal_msgs::msg::PublishedTime;
 
   // Custom comparison struct for rmw_gid_t
   struct GidCompare
@@ -97,18 +113,83 @@ private:
     }
   };
 
-  // ensure that the publisher exists in publisher_ map, if not, create a new one
+  std::map<rmw_gid_t, PublishedTimePublisherPtr, GidCompare> publishers_;
+
   void ensure_publisher_exists(const rmw_gid_t & gid_key, const std::string & topic_name)
   {
     if (publishers_.find(gid_key) == publishers_.end()) {
       publishers_[gid_key] =
-        node_->create_publisher<PublishedTime>(topic_name + publisher_topic_suffix_, qos_);
+        node_->template create_publisher<PublishedTime>(topic_name + publisher_topic_suffix_, qos_);
     }
   }
 
-  // store them for each different publisher of the node
-  std::map<rmw_gid_t, rclcpp::Publisher<PublishedTime>::SharedPtr, GidCompare> publishers_;
+  void publish_if_subscribed_impl(
+    const rmw_gid_t & gid, const char * topic_name, const rclcpp::Time & stamp)
+  {
+    ensure_publisher_exists(gid, topic_name);
+
+    const auto & pub_published_time = publishers_[gid];
+    if (pub_published_time->get_subscription_count() > 0) {
+      publish_message(pub_published_time, stamp);
+    }
+  }
+
+  void publish_if_subscribed_impl(
+    const rmw_gid_t & gid, const char * topic_name, const std_msgs::msg::Header & header)
+  {
+    ensure_publisher_exists(gid, topic_name);
+
+    const auto & pub_published_time = publishers_[gid];
+    if (pub_published_time->get_subscription_count() > 0) {
+      publish_message(pub_published_time, header);
+    }
+  }
+
+  // For rclcpp::Node
+  template <typename U = NodeT>
+  typename std::enable_if<std::is_same<U, rclcpp::Node>::value>::type publish_message(
+    const PublishedTimePublisherPtr & pub, const rclcpp::Time & stamp)
+  {
+    PublishedTime published_time;
+    published_time.header.stamp = stamp;
+    published_time.published_stamp = rclcpp::Clock().now();
+    pub->publish(published_time);
+  }
+
+  template <typename U = NodeT>
+  typename std::enable_if<std::is_same<U, rclcpp::Node>::value>::type publish_message(
+    const PublishedTimePublisherPtr & pub, const std_msgs::msg::Header & header)
+  {
+    PublishedTime published_time;
+    published_time.header = header;
+    published_time.published_stamp = rclcpp::Clock().now();
+    pub->publish(published_time);
+  }
+
+  // For agnocast::Node
+  template <typename U = NodeT>
+  typename std::enable_if<std::is_same<U, agnocast::Node>::value>::type publish_message(
+    const PublishedTimePublisherPtr & pub, const rclcpp::Time & stamp)
+  {
+    auto msg = pub->borrow_loaned_message();
+    msg->header.stamp = stamp;
+    msg->published_stamp = rclcpp::Clock().now();
+    pub->publish(std::move(msg));
+  }
+
+  template <typename U = NodeT>
+  typename std::enable_if<std::is_same<U, agnocast::Node>::value>::type publish_message(
+    const PublishedTimePublisherPtr & pub, const std_msgs::msg::Header & header)
+  {
+    auto msg = pub->borrow_loaned_message();
+    msg->header = header;
+    msg->published_stamp = rclcpp::Clock().now();
+    pub->publish(std::move(msg));
+  }
 };
+
+using PublishedTimePublisher = BasicPublishedTimePublisher<rclcpp::Node>;
+
 }  // namespace autoware_utils_debug
 
 #endif  // AUTOWARE_UTILS_DEBUG__PUBLISHED_TIME_PUBLISHER_HPP_
