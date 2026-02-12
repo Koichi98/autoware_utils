@@ -64,7 +64,7 @@ class BasicDebugPublisher
 public:
   static constexpr bool is_agnocast = DebugPublisherTraits<NodeT>::is_agnocast;
 
-  explicit BasicDebugPublisher(NodeT * node, const char * ns) : node_(node), ns_(ns) {}
+  explicit BasicDebugPublisher(NodeT * node, const std::string & ns) : node_(node), ns_(ns) {}
 
   template <
     class T,
@@ -103,7 +103,7 @@ public:
 
 private:
   NodeT * node_;
-  const char * ns_;
+  std::string ns_;
   std::unordered_map<std::string, std::any> pub_map_;
 };
 

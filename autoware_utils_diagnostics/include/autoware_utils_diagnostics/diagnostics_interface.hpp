@@ -45,22 +45,12 @@ struct DiagnosticsPublisherTraits<agnocast::Node>
   static constexpr bool is_agnocast = true;
 };
 
-template <typename NodeT = rclcpp::Node>
-class BasicDiagnosticsInterface
+// Non-template base class for DiagnosticsInterface.
+// Contains NodeT-independent methods (clear, add_key_value, update_level_and_message).
+class DiagnosticsInterfaceBase
 {
 public:
-  using Traits = DiagnosticsPublisherTraits<NodeT>;
-  using PublisherPtr = typename Traits::PublisherPtr;
-
-  BasicDiagnosticsInterface(NodeT * node, const std::string & diagnostic_name)
-  : clock_(node->get_clock())
-  {
-    diagnostics_pub_ =
-      node->template create_publisher<diagnostic_msgs::msg::DiagnosticArray>("/diagnostics", 10);
-    diagnostics_status_msg_.name =
-      std::string(node->get_name()) + std::string(": ") + diagnostic_name;
-    diagnostics_status_msg_.hardware_id = node->get_name();
-  }
+  virtual ~DiagnosticsInterfaceBase() = default;
 
   void clear()
   {
@@ -122,6 +112,27 @@ public:
     }
   }
 
+protected:
+  diagnostic_msgs::msg::DiagnosticStatus diagnostics_status_msg_;
+};
+
+template <typename NodeT = rclcpp::Node>
+class BasicDiagnosticsInterface : public DiagnosticsInterfaceBase
+{
+public:
+  using Traits = DiagnosticsPublisherTraits<NodeT>;
+  using PublisherPtr = typename Traits::PublisherPtr;
+
+  BasicDiagnosticsInterface(NodeT * node, const std::string & diagnostic_name)
+  : clock_(node->get_clock())
+  {
+    diagnostics_pub_ =
+      node->template create_publisher<diagnostic_msgs::msg::DiagnosticArray>("/diagnostics", 10);
+    diagnostics_status_msg_.name =
+      std::string(node->get_name()) + std::string(": ") + diagnostic_name;
+    diagnostics_status_msg_.hardware_id = node->get_name();
+  }
+
   void publish(const rclcpp::Time & publish_time_stamp)
   {
     if constexpr (Traits::is_agnocast) {
@@ -150,8 +161,6 @@ private:
 
   rclcpp::Clock::SharedPtr clock_;
   PublisherPtr diagnostics_pub_;
-
-  diagnostic_msgs::msg::DiagnosticStatus diagnostics_status_msg_;
 };
 
 // Backward compatibility alias
