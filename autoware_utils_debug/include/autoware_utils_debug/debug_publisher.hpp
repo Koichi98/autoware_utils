@@ -28,6 +28,14 @@
 #include <type_traits>
 #include <unordered_map>
 
+// Forward declarations for agnocast_wrapper support (avoids circular dependency)
+namespace autoware::agnocast_wrapper
+{
+class Node;
+template <typename MessageT>
+class Publisher;
+}  // namespace autoware::agnocast_wrapper
+
 namespace autoware_utils_debug
 {
 namespace debug_publisher
@@ -45,17 +53,26 @@ T_msg to_debug_msg(const T & data, const rclcpp::Time & stamp)
 }
 }  // namespace debug_publisher
 
-// Type traits to check if NodeT is agnocast::Node
+// Type traits to determine NodeT category
 template <typename NodeT>
 struct DebugPublisherTraits
 {
   static constexpr bool is_agnocast = false;
+  static constexpr bool is_agnocast_wrapper = false;
 };
 
 template <>
 struct DebugPublisherTraits<agnocast::Node>
 {
   static constexpr bool is_agnocast = true;
+  static constexpr bool is_agnocast_wrapper = false;
+};
+
+template <>
+struct DebugPublisherTraits<autoware::agnocast_wrapper::Node>
+{
+  static constexpr bool is_agnocast = false;
+  static constexpr bool is_agnocast_wrapper = true;
 };
 
 template <typename NodeT = rclcpp::Node>
@@ -63,6 +80,7 @@ class BasicDebugPublisher
 {
 public:
   static constexpr bool is_agnocast = DebugPublisherTraits<NodeT>::is_agnocast;
+  static constexpr bool is_agnocast_wrapper = DebugPublisherTraits<NodeT>::is_agnocast_wrapper;
 
   explicit BasicDebugPublisher(NodeT * node, const std::string & ns) : node_(node), ns_(ns) {}
 
@@ -72,16 +90,17 @@ public:
   void publish(const std::string & name, const T & data, const rclcpp::QoS & qos = rclcpp::QoS(1))
   {
     if (pub_map_.count(name) == 0) {
-      if constexpr (is_agnocast) {
-        pub_map_[name] =
-          node_->template create_publisher<T>(std::string(ns_) + "/" + name, qos);
-      } else {
-        pub_map_[name] =
-          node_->template create_publisher<T>(std::string(ns_) + "/" + name, qos);
-      }
+      pub_map_[name] =
+        node_->template create_publisher<T>(std::string(ns_) + "/" + name, qos);
     }
 
-    if constexpr (is_agnocast) {
+    if constexpr (is_agnocast_wrapper) {
+      auto & pub = std::any_cast<
+        typename autoware::agnocast_wrapper::Publisher<T>::SharedPtr &>(pub_map_.at(name));
+      auto msg = pub->allocate_output_message_unique();
+      *msg = data;
+      pub->publish(std::move(msg));
+    } else if constexpr (is_agnocast) {
       auto & pub =
         std::any_cast<typename agnocast::Publisher<T>::SharedPtr &>(pub_map_.at(name));
       auto msg = pub->borrow_loaned_message();
