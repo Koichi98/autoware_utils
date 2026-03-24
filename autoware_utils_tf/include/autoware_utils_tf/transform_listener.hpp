@@ -99,6 +99,9 @@ public:
 
   rclcpp::Logger get_logger() { return logger_; }
 
+  tf2_ros::Buffer * get_tf2_buffer() { return tf_buffer_.get(); }
+  agnocast::Buffer * get_agnocast_buffer() { return agnocast_tf_buffer_.get(); }
+
 private:
   rclcpp::Clock::SharedPtr clock_;
   rclcpp::Logger logger_;
