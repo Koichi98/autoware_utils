@@ -22,12 +22,12 @@
 
 // =============== How to use ===============
 // ___In your_node.hpp___
-// #include "autoware/universe_utils/ros/logger_level_configure.hpp"
+// #include "autoware_utils_logging/logger_level_configure.hpp"
 // class YourNode : public rclcpp::Node {
 //   ...
 //
 //   // Define logger_configure as a node class member variable
-//   std::unique_ptr<autoware::universe_utils::LoggerLevelConfigure> logger_configure_;
+//   std::unique_ptr<autoware_utils_logging::LoggerLevelConfigure> logger_configure_;
 // }
 //
 // ___In your_node.cpp___
@@ -37,32 +37,117 @@
 //   // Set up logger_configure
 //   logger_configure_ = std::make_unique<LoggerLevelConfigure>(this);
 // }
+//
+// For agnocast::Node, use BasicLoggerLevelConfigure<agnocast::Node>:
+//   std::unique_ptr<autoware_utils_logging::BasicLoggerLevelConfigure<agnocast::Node>>
+//     logger_configure_;
+//   logger_configure_ =
+//     std::make_unique<autoware_utils_logging::BasicLoggerLevelConfigure<agnocast::Node>>(this);
 
 #ifndef AUTOWARE_UTILS_LOGGING__LOGGER_LEVEL_CONFIGURE_HPP_
 #define AUTOWARE_UTILS_LOGGING__LOGGER_LEVEL_CONFIGURE_HPP_
 
+#include <agnocast/agnocast.hpp>
 #include <logging_demo/srv/config_logger.hpp>
 #include <rclcpp/rclcpp.hpp>
+
+#include <rcutils/logging.h>
+
+#include <functional>
+#include <string>
+#include <type_traits>
+#include <variant>
 
 namespace autoware_utils_logging
 {
 
-class LoggerLevelConfigure
+using ConfigLogger = logging_demo::srv::ConfigLogger;
+
+// Type traits to determine service type based on node type
+template <typename NodeT>
+struct LoggerServiceTraits
 {
-private:
-  using ConfigLogger = logging_demo::srv::ConfigLogger;
-
-public:
-  explicit LoggerLevelConfigure(rclcpp::Node * node);
-
-private:
-  rclcpp::Logger ros_logger_;
-  rclcpp::Service<ConfigLogger>::SharedPtr srv_config_logger_;
-
-  void on_logger_config_service(
-    const ConfigLogger::Request::SharedPtr request,
-    const ConfigLogger::Response::SharedPtr response);
+  using ServicePtr = typename rclcpp::Service<ConfigLogger>::SharedPtr;
 };
+
+template <>
+struct LoggerServiceTraits<agnocast::Node>
+{
+  using ServicePtr = typename agnocast::Service<ConfigLogger>::SharedPtr;
+};
+
+// Non-template base class for LoggerLevelConfigure.
+// Allows storing both rclcpp::Node and agnocast::Node variants in the same pointer.
+class LoggerLevelConfigureInterface
+{
+public:
+  virtual ~LoggerLevelConfigureInterface() = default;
+};
+
+template <typename NodeT = rclcpp::Node>
+class BasicLoggerLevelConfigure : public LoggerLevelConfigureInterface
+{
+public:
+  using ServicePtr = typename LoggerServiceTraits<NodeT>::ServicePtr;
+
+  explicit BasicLoggerLevelConfigure(NodeT * node) : ros_logger_(node->get_logger())
+  {
+    if constexpr (std::is_same_v<NodeT, agnocast::Node>) {
+      srv_config_logger_ = node->template create_service<ConfigLogger>(
+        "~/config_logger",
+        [this](
+          const agnocast::ipc_shared_ptr<agnocast::Service<ConfigLogger>::RequestT> & request,
+          agnocast::ipc_shared_ptr<agnocast::Service<ConfigLogger>::ResponseT> & response) {
+          handle_logger_config(request->level, request->logger_name, response->success);
+        });
+    } else {
+      srv_config_logger_ = node->template create_service<ConfigLogger>(
+        "~/config_logger",
+        [this](
+          const ConfigLogger::Request::SharedPtr request,
+          const ConfigLogger::Response::SharedPtr response) {
+          handle_logger_config(request->level, request->logger_name, response->success);
+        });
+    }
+  }
+
+private:
+  void handle_logger_config(
+    const std::string & level, const std::string & logger_name, bool & success)
+  {
+    int logging_severity;
+    const auto ret_level = rcutils_logging_severity_level_from_string(
+      level.c_str(), rcl_get_default_allocator(), &logging_severity);
+
+    if (ret_level != RCUTILS_RET_OK) {
+      success = false;
+      RCLCPP_WARN_STREAM(
+        ros_logger_, "Failed to change logger level for "
+                       << logger_name
+                       << " due to an invalid logging severity: " << level);
+      return;
+    }
+
+    const auto ret_set =
+      rcutils_logging_set_logger_level(logger_name.c_str(), logging_severity);
+
+    if (ret_set != RCUTILS_RET_OK) {
+      success = false;
+      RCLCPP_WARN_STREAM(ros_logger_, "Failed to set logger level for " << logger_name);
+      return;
+    }
+
+    success = true;
+    RCLCPP_INFO_STREAM(
+      ros_logger_, "Logger level [" << level << "] is set for " << logger_name);
+  }
+
+  rclcpp::Logger ros_logger_;
+  ServicePtr srv_config_logger_;
+};
+
+// Backward compatibility alias
+using LoggerLevelConfigure = BasicLoggerLevelConfigure<rclcpp::Node>;
 
 }  // namespace autoware_utils_logging
 
