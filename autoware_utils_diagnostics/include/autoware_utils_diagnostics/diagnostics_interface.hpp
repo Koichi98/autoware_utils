@@ -112,6 +112,8 @@ public:
     }
   }
 
+  virtual void publish(const rclcpp::Time & publish_time_stamp) = 0;
+
 protected:
   diagnostic_msgs::msg::DiagnosticStatus diagnostics_status_msg_;
 };
@@ -133,7 +135,7 @@ public:
     diagnostics_status_msg_.hardware_id = node->get_name();
   }
 
-  void publish(const rclcpp::Time & publish_time_stamp)
+  void publish(const rclcpp::Time & publish_time_stamp) override
   {
     if constexpr (Traits::is_agnocast) {
       auto msg = diagnostics_pub_->borrow_loaned_message();
