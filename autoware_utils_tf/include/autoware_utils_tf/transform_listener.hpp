@@ -15,6 +15,9 @@
 #ifndef AUTOWARE_UTILS_TF__TRANSFORM_LISTENER_HPP_
 #define AUTOWARE_UTILS_TF__TRANSFORM_LISTENER_HPP_
 
+#include <agnocast/node/agnocast_node.hpp>
+#include <agnocast/node/tf2/buffer.hpp>
+#include <agnocast/node/tf2/transform_listener.hpp>
 #include <rclcpp/rclcpp.hpp>
 
 #include <geometry_msgs/msg/transform_stamped.hpp>
@@ -31,6 +34,7 @@ namespace autoware_utils_tf
 class TransformListener
 {
 public:
+  // Constructor for rclcpp::Node
   explicit TransformListener(rclcpp::Node * node)
   : clock_(node->get_clock()), logger_(node->get_logger())
   {
@@ -41,12 +45,25 @@ public:
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
   }
 
+  // Constructor for agnocast::Node
+  explicit TransformListener(agnocast::Node * node)
+  : clock_(node->get_clock()), logger_(node->get_logger())
+  {
+    agnocast_tf_buffer_ = std::make_shared<agnocast::Buffer>(clock_);
+    agnocast_tf_listener_ =
+      std::make_unique<agnocast::TransformListener>(*agnocast_tf_buffer_, *node);
+  }
+
   geometry_msgs::msg::TransformStamped::ConstSharedPtr get_latest_transform(
     const std::string & from, const std::string & to)
   {
     geometry_msgs::msg::TransformStamped tf;
     try {
-      tf = tf_buffer_->lookupTransform(from, to, tf2::TimePointZero);
+      if (tf_buffer_) {
+        tf = tf_buffer_->lookupTransform(from, to, tf2::TimePointZero);
+      } else {
+        tf = agnocast_tf_buffer_->lookupTransform(from, to, tf2::TimePointZero, tf2::Duration(0));
+      }
     } catch (tf2::TransformException & ex) {
       RCLCPP_WARN_THROTTLE(
         logger_, *clock_, 5000, "failed to get transform from %s to %s: %s", from.c_str(),
@@ -63,7 +80,13 @@ public:
   {
     geometry_msgs::msg::TransformStamped tf;
     try {
-      tf = tf_buffer_->lookupTransform(from, to, time, duration);
+      if (tf_buffer_) {
+        tf = tf_buffer_->lookupTransform(from, to, time, duration);
+      } else {
+        tf = agnocast_tf_buffer_->lookupTransform(
+          from, to, tf2::TimePoint(std::chrono::nanoseconds(time.nanoseconds())),
+          tf2::Duration(std::chrono::nanoseconds(duration.nanoseconds())));
+      }
     } catch (tf2::TransformException & ex) {
       RCLCPP_WARN_THROTTLE(
         logger_, *clock_, 5000, "failed to get transform from %s to %s: %s", from.c_str(),
@@ -76,11 +99,20 @@ public:
 
   rclcpp::Logger get_logger() { return logger_; }
 
+  tf2_ros::Buffer * get_tf2_buffer() { return tf_buffer_.get(); }
+  agnocast::Buffer * get_agnocast_buffer() { return agnocast_tf_buffer_.get(); }
+
 private:
   rclcpp::Clock::SharedPtr clock_;
   rclcpp::Logger logger_;
+
+  // For rclcpp::Node
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+
+  // For agnocast::Node
+  std::shared_ptr<agnocast::Buffer> agnocast_tf_buffer_;
+  std::unique_ptr<agnocast::TransformListener> agnocast_tf_listener_;
 };
 }  // namespace autoware_utils_tf
 

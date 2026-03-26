@@ -29,6 +29,7 @@ class SelfPoseListener
 {
 public:
   explicit SelfPoseListener(rclcpp::Node * node) : transform_listener_(node) {}
+  explicit SelfPoseListener(agnocast::Node * node) : transform_listener_(node) {}
 
   void wait_for_first_pose()
   {
